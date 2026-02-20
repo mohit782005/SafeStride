@@ -24,6 +24,7 @@ build/
 .env.local
 
 # Data & model artifacts
+data/*.csv
 data/raw/*
 data/processed/*
 models/*.pt
