@@ -60,6 +60,7 @@ class CrimeScorer:
         self.crimes_gdf = None     # GeoDataFrame of crime points
         self.spatial_index = None  # STRtree for fast nearest-edge lookups
         self.snapped = None        # DataFrame mapping crimes → edges
+        self.edge_scores = None    # Series of safety scores per edge
 
     # ──────────────────────────────────────────
     # GRAPH LOADING
@@ -392,4 +393,117 @@ class CrimeScorer:
             self.snapped["final_weight"].mean(),
             self.snapped["final_weight"].min(),
             self.snapped["final_weight"].max(),
+        )
+
+    # ──────────────────────────────────────────
+    # AGGREGATE EDGE SCORES
+    # ──────────────────────────────────────────
+    def aggregate_edge_scores(self) -> None:
+        """
+        Sum the final_weight of all crimes snapped to each edge.
+
+        Why sum?
+          An edge with 10 thefts (3.0 each = 30.0) should score higher
+          than an edge with 1 robbery (7.0). Summing captures both
+          *frequency* and *severity* in a single number.
+
+        Why reindex against all edges?
+          Most edges have zero crimes nearby — but they still exist in
+          the graph and need a score of 0.0 for routing. Reindexing
+          ensures every edge in self.edges_gdf has an entry in
+          self.edge_scores, even if no crime was snapped to it.
+
+        Result
+        ------
+        self.edge_scores : pd.Series
+            Indexed by (u, v, key), values are summed final_weight.
+            Edges with no crimes get 0.0.
+        """
+        if self.snapped is None or "final_weight" not in self.snapped.columns:
+            raise RuntimeError(
+                "Weights not computed. Call compute_crime_weights() first."
+            )
+
+        logger.info("Aggregating crime weights per edge...")
+
+        # Group by edge identity and sum all crime weights on that edge.
+        # This collapses many crime rows into one score per edge.
+        grouped = (
+            self.snapped
+            .groupby(["u", "v", "key"])["final_weight"]
+            .sum()
+        )
+
+        # Reindex so every edge in the graph appears.
+        # fill_value=0.0 gives crime-free edges a score of zero.
+        self.edge_scores = grouped.reindex(
+            self.edges_gdf.index, fill_value=0.0
+        )
+
+        nonzero = (self.edge_scores > 0).sum()
+        total = len(self.edge_scores)
+
+        logger.info(
+            "Edge scores aggregated: %d/%d edges have non-zero scores (%.1f%%).",
+            nonzero,
+            total,
+            nonzero / total * 100,
+        )
+
+    # ──────────────────────────────────────────
+    # NORMALIZE SCORES
+    # ──────────────────────────────────────────
+    def normalize_scores(self) -> None:
+        """
+        Apply log-compression and min-max normalization to edge_scores.
+
+        Why log1p first?
+          Raw crime counts follow a heavy-tailed distribution — a few
+          edges near crime hotspots have scores in the hundreds while
+          most are near zero. log1p (= log(1 + x)) compresses the
+          high end so a score of 200 doesn't completely dominate a
+          score of 20. The "+1" ensures log(0) doesn't blow up.
+
+        Why min-max to [0, 1]?
+          Normalized scores are unit-agnostic and easy to blend with
+          other factors (distance, lighting, etc.) in the routing
+          cost function. 0.0 = safest, 1.0 = most dangerous.
+
+        Edge case
+        ---------
+        If all edges have the same score (max == min), normalization
+        would divide by zero. In that (unlikely) case we set all
+        scores to 0.0 — every edge is equally "safe".
+
+        Result
+        ------
+        self.edge_scores is updated in-place with values in [0.0, 1.0].
+        Edges that were 0.0 before log1p remain 0.0 after (since log1p(0)=0).
+        """
+        if self.edge_scores is None:
+            raise RuntimeError(
+                "Edge scores not computed. Call aggregate_edge_scores() first."
+            )
+
+        logger.info("Normalizing edge scores (log1p + min-max)...")
+
+        # Step 1: Log-compress to tame the heavy tail.
+        log_scores = np.log1p(self.edge_scores)
+
+        # Step 2: Min-max normalize to [0, 1].
+        score_min = log_scores.min()
+        score_max = log_scores.max()
+
+        if score_max == score_min:
+            # All edges have identical scores — set everything to 0 (equally safe).
+            self.edge_scores = log_scores * 0.0
+            logger.warning("All edge scores identical — normalized to 0.0.")
+        else:
+            self.edge_scores = (log_scores - score_min) / (score_max - score_min)
+
+        logger.info(
+            "Normalization complete. Min=%.4f, Max=%.4f, Mean=%.4f",
+            self.edge_scores.min(),
+            self.edge_scores.max(),
+            self.edge_scores.mean(),
         )
