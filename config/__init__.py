@@ -1,0 +1,1 @@
+# SafeStride configuration package

@@ -1,0 +1,28 @@
+# === Core Geospatial ===
+osmnx>=2.0.0          # Download & analyze street networks from OpenStreetMap
+networkx>=3.0         # Graph data structures & shortest-path algorithms
+shapely>=2.0          # Geometric operations on spatial data
+geopandas>=1.0        # Geospatial extension of pandas
+
+# === Web Framework ===
+fastapi>=0.110        # Modern async web framework for the API
+uvicorn>=0.30         # ASGI server to run FastAPI
+
+# === Database ===
+sqlalchemy>=2.0       # ORM for database interactions
+psycopg2-binary>=2.9  # PostgreSQL adapter (precompiled, no C compiler needed)
+geoalchemy2>=0.15     # SQLAlchemy + PostGIS spatial queries
+
+# === Data Science ===
+pandas>=2.0           # Tabular data manipulation & analysis
+numpy>=1.26           # Numerical computing (arrays, linear algebra)
+scikit-learn>=1.4     # Classical ML (clustering, classification)
+
+# === Deep Learning ===
+torch>=2.2            # Deep learning framework for safety prediction
+
+# === Visualization ===
+matplotlib>=3.8       # Plotting & visualization
+
+# === Utilities ===
+python-dotenv>=1.0    # Load environment variables from .env files
