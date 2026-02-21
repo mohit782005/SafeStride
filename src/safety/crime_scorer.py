@@ -507,3 +507,152 @@ class CrimeScorer:
             self.edge_scores.max(),
             self.edge_scores.mean(),
         )
+
+    # ──────────────────────────────────────────
+    # ATTACH SCORES TO GRAPH
+    # ──────────────────────────────────────────
+    def attach_to_graph(self) -> None:
+        """
+        Write each edge's normalized crime_risk_score as a graph attribute.
+
+        Why store on the graph?
+          The NetworkX MultiDiGraph is the authoritative data structure for
+          routing (Dijkstra / A*). If we store scores only in a separate
+          Series, the routing code must do an external lookup per edge.
+          Writing the score directly onto the graph edge means routing
+          algorithms can read it as a native edge weight — no extra joins.
+
+        How OSMnx edges work:
+          Each edge is accessed via self.graph[u][v][key].
+          self.edge_scores is indexed by (u, v, key) so we iterate the
+          Series items(), unpack the triple, and write the attribute.
+
+        Edges missing from edge_scores (shouldn't happen after reindex,
+        but guarded for safety) receive 0.0 — treat them as crime-free.
+        """
+        if self.edge_scores is None:
+            raise RuntimeError(
+                "Edge scores not computed. Call normalize_scores() first."
+            )
+        if self.graph is None:
+            raise RuntimeError(
+                "Graph not loaded. Call load_graph() first."
+            )
+
+        logger.info("Attaching crime_risk_score to %d graph edges...", len(self.edge_scores))
+
+        for (u, v, key), score in self.edge_scores.items():
+            # Guard: only write if the edge actually exists in the graph.
+            if self.graph.has_edge(u, v, key):
+                self.graph[u][v][key]["crime_risk_score"] = float(score)
+
+        # Any graph edge not covered by edge_scores gets 0.0.
+        # After reindex this set should be empty, but belt-and-suspenders.
+        missing = 0
+        for u, v, key in self.graph.edges(keys=True):
+            if "crime_risk_score" not in self.graph[u][v][key]:
+                self.graph[u][v][key]["crime_risk_score"] = 0.0
+                missing += 1
+
+        if missing:
+            logger.warning(
+                "%d graph edges had no score entry — defaulted to 0.0.", missing
+            )
+
+        logger.info("crime_risk_score attached to all graph edges.")
+
+    # ──────────────────────────────────────────
+    # SAVE SCORES TO CSV
+    # ──────────────────────────────────────────
+    def save_scores(self, filepath: str = "data/processed/edge_crime_scores.csv") -> None:
+        """
+        Persist the normalized edge scores to a CSV file.
+
+        Parameters
+        ----------
+        filepath : str
+            Destination path for the CSV (relative to project root or absolute).
+            Parent directories are created automatically if they don't exist.
+
+        Output columns
+        --------------
+        u, v, key        : OSMnx edge multi-index (identifies the road segment)
+        crime_risk_score : Normalized danger score in [0.0, 1.0]
+
+        Why save to CSV?
+          The scores represent many minutes of compute (network download,
+          spatial join, PyGEOS distance calc). Persisting them means we
+          can re-run the routing layer without re-running the scorer, and
+          we can version/audit the scores like any other dataset.
+        """
+        if self.edge_scores is None:
+            raise RuntimeError(
+                "Edge scores not computed. Call normalize_scores() first."
+            )
+
+        path = Path(filepath)
+
+        # Create parent directories (e.g. data/processed/) if they don't exist.
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Convert the Series (indexed by (u, v, key)) to a tidy DataFrame.
+        df = (
+            self.edge_scores
+            .rename("crime_risk_score")
+            .reset_index()              # (u, v, key) become regular columns
+        )
+        df.columns = ["u", "v", "key", "crime_risk_score"]
+
+        df.to_csv(path, index=False)
+
+        logger.info(
+            "Edge scores saved to '%s' (%d rows, %.2f KB).",
+            path.resolve(),
+            len(df),
+            path.stat().st_size / 1024,
+        )
+
+    # ──────────────────────────────────────────
+    # FULL PIPELINE RUNNER
+    # ──────────────────────────────────────────
+    def run(self) -> object:
+        """
+        Execute the complete CrimeScorer pipeline end-to-end.
+
+        Step order
+        ----------
+        1. load_graph           — download & project Chicago walk network
+        2. load_crimes          — load & project crime CSV
+        3. build_spatial_index  — index edge geometries for fast lookup
+        4. snap_crimes_to_edges — match each crime to its nearest road edge
+        5. compute_crime_weights— weight each crime by type, time, day
+        6. aggregate_edge_scores— sum weights per edge (+ zero-fill)
+        7. normalize_scores     — log1p + min-max → [0, 1]
+        8. attach_to_graph      — write scores onto NetworkX edge attributes
+        9. save_scores          — persist to data/processed/edge_crime_scores.csv
+
+        Returns
+        -------
+        networkx.MultiDiGraph
+            The projected Chicago walk graph with crime_risk_score on every edge.
+            Ready for safe-route computation in Step 4.
+        """
+        logger.info("=" * 55)
+        logger.info("SafeStride CrimeScorer — full pipeline starting")
+        logger.info("=" * 55)
+
+        self.load_graph()
+        self.load_crimes()
+        self.build_spatial_index()
+        self.snap_crimes_to_edges()
+        self.compute_crime_weights()
+        self.aggregate_edge_scores()
+        self.normalize_scores()
+        self.attach_to_graph()
+        self.save_scores()
+
+        logger.info("=" * 55)
+        logger.info("CrimeScorer pipeline complete. Graph ready for routing.")
+        logger.info("=" * 55)
+
+        return self.graph
