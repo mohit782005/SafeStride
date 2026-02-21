@@ -41,3 +41,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# OSMnx / spatial cache (can be very large — 100MB+)
+cache/
