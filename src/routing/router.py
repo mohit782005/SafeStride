@@ -246,10 +246,14 @@ class SafeStrideRouter:
         -------
         list[dict]
             Three dicts, each with keys:
-                - ``label``  : human-readable preset name (str)
-                - ``alpha``  : crime-risk weight used (float)
-                - ``beta``   : distance weight used (float)
-                - ``route``  : ordered list of OSMnx node IDs (list[int])
+                - ``label``              : human-readable preset name (str)
+                - ``alpha``              : crime-risk weight used (float)
+                - ``beta``               : distance weight used (float)
+                - ``route``              : ordered list of OSMnx node IDs (list[int])
+                - ``total_distance_m``   : sum of edge lengths in metres (float)
+                - ``avg_safety_score``   : mean crime_risk_score along route (float)
+                - ``max_danger_score``   : worst single edge crime_risk_score (float)
+                - ``estimated_time_min`` : walk-time estimate at 5 km/h (float)
         """
         presets = [
             {"label": "safety_maximized", "alpha": 0.9, "beta": 0.1},
@@ -269,19 +273,78 @@ class SafeStrideRouter:
             self.set_edge_weights(alpha=preset["alpha"], beta=preset["beta"])
             route = self.find_route(origin_lat, origin_lon, dest_lat, dest_lon)
 
+            stats = self.compute_route_stats(route)
             results.append(
                 {
                     "label": preset["label"],
                     "alpha": preset["alpha"],
                     "beta":  preset["beta"],
                     "route": route,
+                    **stats,
                 }
             )
             logger.info(
-                "Pareto route '%s': %d nodes.",
+                "Pareto route '%s': %d nodes, %.0f m, ~%.1f min.",
                 preset["label"],
                 len(route),
+                stats["total_distance_m"],
+                stats["estimated_time_min"],
             )
 
         logger.info("All 3 Pareto routes computed successfully.")
         return results
+
+    # ──────────────────────────────────────────
+    # ROUTE STATISTICS
+    # ──────────────────────────────────────────
+    def compute_route_stats(self, route_nodes: list[int]) -> dict:
+        """
+        Walk the edges of a route and compute key statistics.
+
+        Parameters
+        ----------
+        route_nodes : list[int]
+            Ordered list of OSMnx node IDs as returned by find_route().
+
+        Returns
+        -------
+        dict
+            ``total_distance_m``   — sum of edge ``length`` attributes (metres).
+            ``avg_safety_score``   — mean ``crime_risk_score`` across all edges
+                                     on the route (0 = perfectly safe, 1 = max danger).
+            ``max_danger_score``   — highest single-edge ``crime_risk_score``
+                                     encountered on the route.
+            ``estimated_time_min`` — walking-time estimate assuming an average
+                                     pedestrian speed of 5 km/h (83.0 m/min).
+        """
+        # OSMnx MultiDiGraph: graph[u][v] is a dict of parallel edges keyed
+        # by integer key.  We always take key 0 (the primary / shortest edge).
+        WALK_SPEED_M_PER_MIN = 83.0  # 5 km/h ≈ 83.33 m/min
+
+        total_distance = 0.0
+        crime_scores: list[float] = []
+
+        for i in range(len(route_nodes) - 1):
+            u, v = route_nodes[i], route_nodes[i + 1]
+            # Use key=0 (first parallel edge); fall back gracefully.
+            edge_data = self.graph[u][v][0]
+
+            total_distance += edge_data.get("length", 0.0)
+            crime_scores.append(edge_data.get("crime_risk_score", 0.0))
+
+        avg_safety  = sum(crime_scores) / len(crime_scores) if crime_scores else 0.0
+        max_danger  = max(crime_scores)                      if crime_scores else 0.0
+        est_time    = total_distance / WALK_SPEED_M_PER_MIN
+
+        stats = {
+            "total_distance_m":   round(total_distance, 2),
+            "avg_safety_score":   round(avg_safety,    4),
+            "max_danger_score":   round(max_danger,    4),
+            "estimated_time_min": round(est_time,      2),
+        }
+
+        logger.debug(
+            "Route stats — dist=%.0f m, avg_risk=%.4f, max_risk=%.4f, time=%.1f min.",
+            total_distance, avg_safety, max_danger, est_time,
+        )
+        return stats
