@@ -208,3 +208,80 @@ class SafeStrideRouter:
         )
 
         return route
+
+    # ──────────────────────────────────────────
+    # PARETO ROUTE GENERATION
+    # ──────────────────────────────────────────
+    def find_pareto_routes(
+        self,
+        origin_lat: float,
+        origin_lon: float,
+        dest_lat: float,
+        dest_lon: float,
+    ) -> list[dict]:
+        """
+        Generate three Pareto-optimal route alternatives by varying the
+        safety ↔ speed trade-off parameter.
+
+        Each alternative re-runs set_edge_weights() with a different alpha/beta
+        ratio and then calls find_route(), so the graph edges are re-weighted
+        for each scenario before the Dijkstra search.
+
+        Presets
+        -------
+        | Label              | alpha | beta | Behaviour                        |
+        |--------------------|-------|------|----------------------------------|
+        | safety_maximized   |  0.9  |  0.1 | Strongly avoids high-crime edges |
+        | balanced           |  0.5  |  0.5 | Equal safety and speed bias      |
+        | speed_maximized    |  0.1  |  0.9 | Prefers shortest total distance  |
+
+        Parameters
+        ----------
+        origin_lat, origin_lon : float
+            Start point in WGS-84 decimal degrees.
+        dest_lat, dest_lon : float
+            End point in WGS-84 decimal degrees.
+
+        Returns
+        -------
+        list[dict]
+            Three dicts, each with keys:
+                - ``label``  : human-readable preset name (str)
+                - ``alpha``  : crime-risk weight used (float)
+                - ``beta``   : distance weight used (float)
+                - ``route``  : ordered list of OSMnx node IDs (list[int])
+        """
+        presets = [
+            {"label": "safety_maximized", "alpha": 0.9, "beta": 0.1},
+            {"label": "balanced",         "alpha": 0.5, "beta": 0.5},
+            {"label": "speed_maximized",  "alpha": 0.1, "beta": 0.9},
+        ]
+
+        results = []
+        for preset in presets:
+            logger.info(
+                "Computing Pareto route '%s' (alpha=%.1f, beta=%.1f)...",
+                preset["label"],
+                preset["alpha"],
+                preset["beta"],
+            )
+            # Re-weight edges for this scenario before routing.
+            self.set_edge_weights(alpha=preset["alpha"], beta=preset["beta"])
+            route = self.find_route(origin_lat, origin_lon, dest_lat, dest_lon)
+
+            results.append(
+                {
+                    "label": preset["label"],
+                    "alpha": preset["alpha"],
+                    "beta":  preset["beta"],
+                    "route": route,
+                }
+            )
+            logger.info(
+                "Pareto route '%s': %d nodes.",
+                preset["label"],
+                len(route),
+            )
+
+        logger.info("All 3 Pareto routes computed successfully.")
+        return results
