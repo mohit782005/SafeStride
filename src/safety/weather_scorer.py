@@ -25,30 +25,39 @@ class WeatherScorer:
             response = requests.get(url)
             if not response.ok:
                 raise RuntimeError(f"API call failed with status: {response.status_code}, response: {response.text}")
+                
+            data = response.json()
+            
+            condition = data.get("weather", [{}])[0].get("main", "Unknown")
+            self.logger.info(f"Fetched weather condition: {condition}")
+            
+            dt = data.get("dt", 0)
+            sys_data = data.get("sys", {})
+            sunrise = sys_data.get("sunrise", 0)
+            sunset = sys_data.get("sunset", 0)
+            
+            is_night = False
+            if sunrise and sunset and dt:
+                is_night = dt < sunrise or dt > sunset
+                
+            return {
+                "condition": condition,
+                "temp_c": float(data.get("main", {}).get("temp", 0.0)),
+                "visibility_m": int(data.get("visibility", 10000)),
+                "wind_speed_ms": float(data.get("wind", {}).get("speed", 0.0)),
+                "is_night": is_night
+            }
+            
         except Exception as e:
-            raise RuntimeError(f"API call failed: {e}")
-            
-        data = response.json()
-        
-        condition = data.get("weather", [{}])[0].get("main", "Unknown")
-        self.logger.info(f"Fetched weather condition: {condition}")
-        
-        dt = data.get("dt", 0)
-        sys_data = data.get("sys", {})
-        sunrise = sys_data.get("sunrise", 0)
-        sunset = sys_data.get("sunset", 0)
-        
-        is_night = False
-        if sunrise and sunset and dt:
-            is_night = dt < sunrise or dt > sunset
-            
-        return {
-            "condition": condition,
-            "temp_c": float(data.get("main", {}).get("temp", 0.0)),
-            "visibility_m": int(data.get("visibility", 10000)),
-            "wind_speed_ms": float(data.get("wind", {}).get("speed", 0.0)),
-            "is_night": is_night
-        }
+            self.logger.warning(f"Weather API unavailable: {e}")
+            self.logger.info("Falling back to default 'Clear' daytime weather.")
+            return {
+                "condition": "Clear",
+                "temp_c": 20.0,
+                "visibility_m": 10000,
+                "wind_speed_ms": 0.0,
+                "is_night": False
+            }
 
     def compute_weather_multiplier(self, weather: dict) -> float:
         condition = weather.get("condition", "Unknown")

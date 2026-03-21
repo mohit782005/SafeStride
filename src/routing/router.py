@@ -207,9 +207,18 @@ class SafeStrideRouter:
         )
 
         # ── Snap GPS coords to nearest graph nodes ──────────────────────────
-        # ox.nearest_nodes expects (X=longitude, Y=latitude) — note the order.
-        origin_node = ox.nearest_nodes(self.graph, X=origin_lon, Y=origin_lat)
-        dest_node   = ox.nearest_nodes(self.graph, X=dest_lon,   Y=dest_lat)
+        # Project GPS coordinates to the graph's coordinate system (e.g. EPSG:3435)
+        # origin_lat, origin_lon are WGS-84 (EPSG:4326), but the graph is in US Feet.
+        import geopandas as gpd
+        from shapely.geometry import Point
+        
+        target_crs = self.graph.graph.get("crs", "EPSG:3435")
+        
+        origin_pt = gpd.GeoSeries([Point(origin_lon, origin_lat)], crs="EPSG:4326").to_crs(target_crs).iloc[0]
+        dest_pt = gpd.GeoSeries([Point(dest_lon, dest_lat)], crs="EPSG:4326").to_crs(target_crs).iloc[0]
+
+        origin_node = ox.nearest_nodes(self.graph, X=origin_pt.x, Y=origin_pt.y)
+        dest_node   = ox.nearest_nodes(self.graph, X=dest_pt.x,   Y=dest_pt.y)
 
         logger.info(
             "Snapped to nodes: origin=%d, destination=%d",
@@ -386,7 +395,13 @@ class SafeStrideRouter:
         """
         geometry = []
         for node in route_nodes:
-            # OSMnx graph nodes store lat as 'y' and lon as 'x'
+            # OSMnx graph nodes preserve their unprojected coordinates as 'lat' and 'lon'
             node_data = self.graph.nodes[node]
-            geometry.append([float(node_data['y']), float(node_data['x'])])
+            
+            # Use 'lat'/'lon' if present, otherwise fallback to unprojecting y/x
+            if 'lat' in node_data and 'lon' in node_data:
+                geometry.append([float(node_data['lat']), float(node_data['lon'])])
+            else:
+                geometry.append([float(node_data['y']), float(node_data['x'])])
+                
         return geometry
