@@ -21,6 +21,8 @@ import logging
 import networkx as nx
 import osmnx as ox
 
+from src.safety.weather_scorer import WeatherScorer
+
 logger = logging.getLogger("safestride.router")
 
 
@@ -43,6 +45,7 @@ class SafeStrideRouter:
             and length (metres) on every edge.
         """
         self.graph = graph
+        self.weather_scorer = WeatherScorer()
         logger.info(
             "SafeStrideRouter initialised with %d nodes and %d edges.",
             len(self.graph.nodes),
@@ -89,6 +92,9 @@ class SafeStrideRouter:
         if alpha == 0 and beta == 0:
             raise ValueError("alpha and beta cannot both be zero.")
 
+        # Apply weather multiplier to crime scores before computing weights
+        self.apply_weather_multiplier()
+
         logger.info(
             "Computing route_weight for %d edges (alpha=%.2f, beta=%.2f)...",
             len(self.graph.edges),
@@ -120,6 +126,26 @@ class SafeStrideRouter:
             )
 
         logger.info("route_weight attached to all edges.")
+
+    def apply_weather_multiplier(self) -> None:
+        """
+        Fetches current weather, computes the multiplier, then multiplies
+        every edge's crime_risk_score by it, clamping the result to 1.0 max.
+        Logs the weather condition and applied multiplier.
+        """
+        weather = self.weather_scorer.fetch_weather()
+        multiplier = self.weather_scorer.compute_weather_multiplier(weather)
+        
+        logger.info(
+            "Weather condition: %s | Applying pedestrian risk multiplier: %.2f",
+            weather.get("condition", "Unknown"),
+            multiplier
+        )
+        
+        for u, v, key, data in self.graph.edges(keys=True, data=True):
+            if "crime_risk_score" in data:
+                new_score = data["crime_risk_score"] * multiplier
+                data["crime_risk_score"] = min(new_score, 1.0)
 
     # ──────────────────────────────────────────
     # ROUTE FINDING

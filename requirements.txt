@@ -26,3 +26,4 @@ matplotlib>=3.8       # Plotting & visualization
 
 # === Utilities ===
 python-dotenv>=1.0    # Load environment variables from .env files
+requests>=2.31        # HTTP library for API requests
