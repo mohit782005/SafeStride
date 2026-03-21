@@ -374,3 +374,19 @@ class SafeStrideRouter:
             total_distance, avg_safety, max_danger, est_time,
         )
         return stats
+
+    def get_route_geometry(self, route_nodes: list[int]) -> list[list[float]]:
+        """
+        Walks the node list and extracts (lat, lon) for each node.
+        
+        Returns
+        -------
+        list[list[float]]
+            List of [lat, lon] pairs representing the route geometry.
+        """
+        geometry = []
+        for node in route_nodes:
+            # OSMnx graph nodes store lat as 'y' and lon as 'x'
+            node_data = self.graph.nodes[node]
+            geometry.append([float(node_data['y']), float(node_data['x'])])
+        return geometry
